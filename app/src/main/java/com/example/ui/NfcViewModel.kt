@@ -68,9 +68,24 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val currentList = repository.getAllProfiles().first()
             if (currentList.isEmpty()) {
-                val default1 = NfcProfile(title = "Google AI Studio", url = "https://ai.studio/build")
-                val default2 = NfcProfile(title = "Google Search", url = "https://google.com")
-                val default3 = NfcProfile(title = "Material Design 3", url = "https://m3.material.io")
+                val default1 = NfcProfile(
+                    title = "Google AI Studio",
+                    url = "https://ai.studio/build",
+                    description = "Build with Gemini models in Google AI Studio, a web-based prototyping tool for developers.",
+                    imageUrl = "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?q=80&w=600&auto=format&fit=crop"
+                )
+                val default2 = NfcProfile(
+                    title = "Google Search",
+                    url = "https://google.com",
+                    description = "Search the world's information, including webpages, images, videos and more.",
+                    imageUrl = "https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=600&auto=format&fit=crop"
+                )
+                val default3 = NfcProfile(
+                    title = "Material Design 3",
+                    url = "https://m3.material.io",
+                    description = "Material 3 is the latest version of Google's open-source design system. Design and build beautiful, usable products.",
+                    imageUrl = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+                )
                 
                 repository.insertProfile(default1)
                 repository.insertProfile(default2)
@@ -80,6 +95,30 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
                 val seeded = repository.getAllProfiles().first()
                 if (seeded.isNotEmpty()) {
                     setActiveProfile(seeded[0])
+                }
+            } else {
+                // Populate imageUrl and description for existing seeded profiles if they are null
+                currentList.forEach { profile ->
+                    if (profile.imageUrl == null) {
+                        val updatedProfile = when (profile.url) {
+                            "https://ai.studio/build" -> profile.copy(
+                                description = "Build with Gemini models in Google AI Studio, a web-based prototyping tool for developers.",
+                                imageUrl = "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?q=80&w=600&auto=format&fit=crop"
+                            )
+                            "https://google.com" -> profile.copy(
+                                description = "Search the world's information, including webpages, images, videos and more.",
+                                imageUrl = "https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=600&auto=format&fit=crop"
+                            )
+                            "https://m3.material.io" -> profile.copy(
+                                description = "Material 3 is the latest version of Google's open-source design system. Design and build beautiful, usable products.",
+                                imageUrl = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
+                            )
+                            else -> null
+                        }
+                        if (updatedProfile != null) {
+                            repository.insertProfile(updatedProfile)
+                        }
+                    }
                 }
             }
         }
@@ -144,18 +183,32 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
                     .build()
                 val request = Request.Builder()
                     .url(url)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val html = response.body?.string() ?: ""
                         
                         val ogTitle = extractMetaTag(html, "og:title")
-                        val title = ogTitle ?: extractTitleTag(html) ?: ""
-                        val description = extractMetaTag(html, "og:description") ?: extractMetaTag(html, "description")
-                        val imageUrl = extractMetaTag(html, "og:image")
+                        val twitterTitle = extractMetaTag(html, "twitter:title")
+                        val title = ogTitle ?: twitterTitle ?: extractTitleTag(html) ?: ""
                         
-                        OpenGraphData(title.trim(), description?.trim(), imageUrl?.trim())
+                        val description = extractMetaTag(html, "og:description") 
+                            ?: extractMetaTag(html, "twitter:description")
+                            ?: extractMetaTag(html, "description")
+                        
+                        // Try og:image -> twitter:image -> apple-touch-icon -> shortcut icon -> standard icon
+                        val rawImageUrl = extractMetaTag(html, "og:image")
+                            ?: extractMetaTag(html, "twitter:image")
+                            ?: extractMetaTag(html, "twitter:image:src")
+                            ?: extractLinkTag(html, "apple-touch-icon")
+                            ?: extractLinkTag(html, "apple-touch-icon-precomposed")
+                            ?: extractLinkTag(html, "shortcut icon")
+                            ?: extractLinkTag(html, "icon")
+                        
+                        val imageUrl = resolveUrl(url, rawImageUrl)
+                        
+                        OpenGraphData(title.trim(), description?.trim(), imageUrl)
                     } else {
                         OpenGraphData("", null, null)
                     }
@@ -165,6 +218,56 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
                 OpenGraphData("", null, null)
             }
         }
+    }
+
+    private fun resolveUrl(baseUrl: String, relativeUrl: String?): String? {
+        if (relativeUrl == null || relativeUrl.isBlank()) return null
+        val trimmed = relativeUrl.trim()
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            return trimmed
+        }
+        return try {
+            val baseUri = java.net.URI(baseUrl)
+            val scheme = baseUri.scheme ?: "https"
+            if (trimmed.startsWith("//")) {
+                "$scheme:$trimmed"
+            } else if (trimmed.startsWith("/")) {
+                val host = baseUri.host ?: ""
+                val port = if (baseUri.port != -1) ":${baseUri.port}" else ""
+                "$scheme://$host$port$trimmed"
+            } else {
+                val path = baseUri.path ?: ""
+                val directory = if (path.endsWith("/")) path else path.substringBeforeLast('/', "/")
+                val host = baseUri.host ?: ""
+                val port = if (baseUri.port != -1) ":${baseUri.port}" else ""
+                val normalizedPath = if (directory.endsWith("/")) "$directory$trimmed" else {
+                    if (directory.isEmpty()) "/$trimmed" else "$directory/$trimmed"
+                }
+                "$scheme://$host$port$normalizedPath"
+            }
+        } catch (e: Exception) {
+            trimmed
+        }
+    }
+
+    private fun extractLinkTag(html: String, relValue: String): String? {
+        val patterns = listOf(
+            Pattern.compile("<link\\s+[^>]*rel=[\"']$relValue[\"']\\s+[^>]*href=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE),
+            Pattern.compile("<link\\s+[^>]*href=[\"']([^\"']+)[\"']\\s+[^>]*rel=[\"']$relValue[\"']", Pattern.CASE_INSENSITIVE)
+        )
+        for (pattern in patterns) {
+            val matcher = pattern.matcher(html)
+            if (matcher.find()) {
+                val raw = matcher.group(1) ?: ""
+                return raw
+                    .replace("&amp;", "&")
+                    .replace("&quot;", "\"")
+                    .replace("&apos;", "'")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+            }
+        }
+        return null
     }
 
     private fun extractMetaTag(html: String, property: String): String? {

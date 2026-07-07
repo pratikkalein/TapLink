@@ -27,8 +27,13 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.graphics.asImageBitmap
+import android.graphics.Bitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -105,9 +110,25 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
     var showAddDialog by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var profileToDelete by remember { mutableStateOf<NfcProfile?>(null) }
+    var activeQrProfile by remember { mutableStateOf<NfcProfile?>(null) }
 
-    Scaffold(
-        topBar = {
+    LaunchedEffect(activeQrProfile) {
+        if (activeQrProfile != null) {
+            viewModel.setActiveProfile(activeQrProfile!!)
+            viewModel.setEmulationEnabled(true)
+        }
+    }
+
+    if (activeQrProfile != null) {
+        BackHandler {
+            activeQrProfile = null
+            viewModel.setEmulationEnabled(false)
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
             CenterAlignedTopAppBar(
                 navigationIcon = {
                     if (showSettings) {
@@ -136,7 +157,7 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
                     if (!showSettings) {
                         IconButton(onClick = { showSettings = true }) {
                             Icon(
-                                imageVector = Icons.Default.Settings,
+                                imageVector = Icons.Outlined.Settings,
                                 contentDescription = "Settings",
                                 tint = ImmersiveText
                             )
@@ -210,8 +231,6 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
             }
 
             if (!showSettings) {
-                val activeProfile = profiles.find { it.id == activeProfileId }
-
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
                     modifier = Modifier.fillMaxSize(),
@@ -219,37 +238,7 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp)
                 ) {
-                    // 1. Active Spotlight Section
-                    if (activeProfile != null) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Column {
-                                Text(
-                                    text = "ACTIVE LINK",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ImmersivePrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.5.sp,
-                                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
-                                )
-                                ActiveSpotlightCard(
-                                    profile = activeProfile,
-                                    isNfcEnabled = isNfcEnabled,
-                                    isEmulating = isEmulating,
-                                    onEmulateToggle = { enabled ->
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.setEmulationEnabled(enabled)
-                                    },
-                                    onDelete = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        profileToDelete = activeProfile
-                                    }
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                            }
-                        }
-                    }
-
-                    // 2. Saved profiles List in two columns (No Stored Profiles text as requested)
+                    // Saved profiles List in two columns (No Stored Profiles text as requested)
                     if (profiles.isEmpty()) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             Box(
@@ -290,7 +279,7 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
                                 isActive = isActive,
                                 onSelect = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.setActiveProfile(profile)
+                                    activeQrProfile = profile
                                 },
                                 onDelete = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -352,6 +341,17 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
             titleContentColor = Color.White,
             textContentColor = Color.White.copy(alpha = 0.8f)
         )
+    }
+
+        if (activeQrProfile != null) {
+            QrBroadcastingScreen(
+                profile = activeQrProfile!!,
+                onClose = {
+                    activeQrProfile = null
+                    viewModel.setEmulationEnabled(false)
+                }
+            )
+        }
     }
 }
 
@@ -500,11 +500,19 @@ fun ActiveSpotlightCard(
     isNfcEnabled: Boolean,
     isEmulating: Boolean,
     onEmulateToggle: (Boolean) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onCardTap: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (onCardTap != null) {
+                    Modifier.clickable { onCardTap() }
+                } else {
+                    Modifier
+                }
+            )
             .testTag("active_spotlight_card"),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF25242A)),
         shape = RoundedCornerShape(24.dp),
@@ -1222,3 +1230,219 @@ private val ImmersiveSuccessText: Color
 private val ImmersiveSuccessBorder: Color
     @Composable
     get() = MaterialTheme.colorScheme.primary
+
+@Composable
+fun QrBroadcastingScreen(
+    profile: NfcProfile,
+    onClose: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ImmersiveBg)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Close / Header Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onClose) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = "Back",
+                        tint = ImmersiveText,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "QR & NFC Broadcast",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+
+            // Beautiful Card matching the mockup exactly
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(vertical = 12.dp),
+                colors = CardDefaults.cardColors(containerColor = ImmersiveCardBg),
+                shape = RoundedCornerShape(28.dp),
+                border = BorderStroke(1.5.dp, ImmersiveBorder)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    // Top Left Area: URL Title and Link
+                    Column {
+                        Text(
+                            text = profile.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = profile.url,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ImmersiveText.copy(alpha = 0.5f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // Centered Large QR Code container
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // Nested Card matching the mockup style
+                        Card(
+                            modifier = Modifier
+                                .size(240.dp)
+                                .aspectRatio(1f),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(24.dp),
+                            border = BorderStroke(1.5.dp, ImmersiveBorder.copy(alpha = 0.5f))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(20.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                val qrBitmap = remember(profile.url) {
+                                    generateQrCodeBitmap(profile.url, 400)
+                                }
+                                if (qrBitmap != null) {
+                                    androidx.compose.foundation.Image(
+                                        bitmap = qrBitmap.asImageBitmap(),
+                                        contentDescription = "QR Code for ${profile.url}",
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    Text(
+                                        text = "QR Code",
+                                        color = Color.Black,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Spacer at the bottom
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+
+            // Status Indicator at the bottom of the page
+            Spacer(modifier = Modifier.height(16.dp))
+            BroadcastingStatusIndicator()
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+fun BroadcastingStatusIndicator() {
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.95f,
+        targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scale"
+    )
+
+    Row(
+        modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .background(
+                color = Color(0xFF10B981).copy(alpha = 0.15f),
+                shape = RoundedCornerShape(24.dp)
+            )
+            .border(
+                width = 1.dp,
+                color = Color(0xFF10B981).copy(alpha = 0.4f),
+                shape = RoundedCornerShape(24.dp)
+            )
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .graphicsLayer { this.alpha = alpha }
+                .background(Color(0xFF10B981), shape = androidx.compose.foundation.shape.CircleShape)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = "BROADCASTING VIA NFC & QR",
+            style = MaterialTheme.typography.labelMedium,
+            color = Color(0xFF10B981),
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.5.sp
+        )
+    }
+}
+
+fun generateQrCodeBitmap(content: String, size: Int): Bitmap? {
+    return try {
+        val writer = com.google.zxing.qrcode.QRCodeWriter()
+        val bitMatrix = writer.encode(content, com.google.zxing.BarcodeFormat.QR_CODE, size, size)
+        val width = bitMatrix.width
+        val height = bitMatrix.height
+        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        for (x in 0 until width) {
+            for (y in 0 until height) {
+                bmp.setPixel(
+                    x, 
+                    y, 
+                    if (bitMatrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+                )
+            }
+        }
+        bmp
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
