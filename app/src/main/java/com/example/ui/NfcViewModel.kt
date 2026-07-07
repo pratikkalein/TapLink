@@ -21,6 +21,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.regex.Pattern
+import java.util.concurrent.TimeUnit
 
 class NfcViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -96,11 +102,110 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 url
             }
-            val profile = NfcProfile(title = title, url = formattedUrl)
+            
+            // Fetch OpenGraph data
+            val ogData = fetchOpenGraphData(formattedUrl)
+            
+            val finalTitle = when {
+                title.isNotBlank() -> title
+                ogData.title.isNotBlank() -> ogData.title
+                else -> {
+                    // fallback to domain name
+                    try {
+                        val uri = java.net.URI(formattedUrl)
+                        var domain = uri.host ?: formattedUrl
+                        if (domain.startsWith("www.")) {
+                            domain = domain.substring(4)
+                        }
+                        domain.substringBefore('.').replaceFirstChar { it.uppercase() }
+                    } catch (e: Exception) {
+                        formattedUrl
+                    }
+                }
+            }
+            
+            val profile = NfcProfile(
+                title = finalTitle,
+                url = formattedUrl,
+                description = ogData.description,
+                imageUrl = ogData.imageUrl
+            )
             repository.insertProfile(profile)
             updateWidgets()
         }
     }
+
+    private suspend fun fetchOpenGraphData(url: String): OpenGraphData {
+        return withContext(Dispatchers.IO) {
+            try {
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(5, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                    .build()
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val html = response.body?.string() ?: ""
+                        
+                        val ogTitle = extractMetaTag(html, "og:title")
+                        val title = ogTitle ?: extractTitleTag(html) ?: ""
+                        val description = extractMetaTag(html, "og:description") ?: extractMetaTag(html, "description")
+                        val imageUrl = extractMetaTag(html, "og:image")
+                        
+                        OpenGraphData(title.trim(), description?.trim(), imageUrl?.trim())
+                    } else {
+                        OpenGraphData("", null, null)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                OpenGraphData("", null, null)
+            }
+        }
+    }
+
+    private fun extractMetaTag(html: String, property: String): String? {
+        val patterns = listOf(
+            Pattern.compile("<meta\\s+[^>]*property=[\"']$property[\"']\\s+[^>]*content=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE),
+            Pattern.compile("<meta\\s+[^>]*content=[\"']([^\"']+)[\"']\\s+[^>]*property=[\"']$property[\"']", Pattern.CASE_INSENSITIVE),
+            Pattern.compile("<meta\\s+[^>]*name=[\"']$property[\"']\\s+[^>]*content=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE),
+            Pattern.compile("<meta\\s+[^>]*content=[\"']([^\"']+)[\"']\\s+[^>]*name=[\"']$property[\"']", Pattern.CASE_INSENSITIVE)
+        )
+        for (pattern in patterns) {
+            val matcher = pattern.matcher(html)
+            if (matcher.find()) {
+                val raw = matcher.group(1) ?: ""
+                // Decode simple HTML entities if any
+                return raw
+                    .replace("&amp;", "&")
+                    .replace("&quot;", "\"")
+                    .replace("&apos;", "'")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+            }
+        }
+        return null
+    }
+
+    private fun extractTitleTag(html: String): String? {
+        val pattern = Pattern.compile("<title>([^<]+)</title>", Pattern.CASE_INSENSITIVE)
+        val matcher = pattern.matcher(html)
+        if (matcher.find()) {
+            val raw = matcher.group(1) ?: ""
+            return raw
+                .replace("&amp;", "&")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+        }
+        return null
+    }
+
+    private data class OpenGraphData(val title: String, val description: String?, val imageUrl: String?)
 
     fun deleteProfile(profile: NfcProfile) {
         viewModelScope.launch {

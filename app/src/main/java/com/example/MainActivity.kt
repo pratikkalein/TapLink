@@ -17,8 +17,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -29,6 +36,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.center
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -43,7 +53,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.NfcProfile
 import com.example.ui.NfcViewModel
-import com.example.ui.theme.*
+import com.example.ui.theme.MyApplicationTheme
+import androidx.compose.foundation.isSystemInDarkTheme
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 
 class MainActivity : ComponentActivity() {
     private val viewModel: NfcViewModel by viewModels()
@@ -52,7 +65,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme(darkTheme = true, dynamicColor = false) {
+            MyApplicationTheme {
                 // Monitor NFC state on activity resume
                 val lifecycleOwner = LocalLifecycleOwner.current
                 DisposableEffect(lifecycleOwner) {
@@ -91,6 +104,7 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
 
     var showAddDialog by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var profileToDelete by remember { mutableStateOf<NfcProfile?>(null) }
 
     Scaffold(
         topBar = {
@@ -104,46 +118,19 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
                                 tint = ImmersiveText
                             )
                         }
+                    } else {
+                        Box(modifier = Modifier.padding(start = 12.dp)) {
+                            NfcWalletLogo()
+                        }
                     }
                 },
                 title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(ImmersivePrimary),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Sensors,
-                                contentDescription = null,
-                                tint = ImmersiveOnPrimary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = if (showSettings) "Settings" else "TapLink",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            if (!showSettings) {
-                                Text(
-                                    text = "HCE EMULATOR ACTIVE",
-                                    fontWeight = FontWeight.Bold,
-                                    color = ImmersivePrimary,
-                                    fontSize = 10.sp,
-                                    letterSpacing = 1.5.sp
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = if (showSettings) "Settings" else "TapLink",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium
+                    )
                 },
                 actions = {
                     if (!showSettings) {
@@ -165,7 +152,7 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = ImmersiveCardBg,
+                    containerColor = ImmersiveBg,
                     titleContentColor = Color.White
                 )
             )
@@ -192,6 +179,7 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
                 }
             }
         },
+        floatingActionButtonPosition = FabPosition.Center,
         containerColor = ImmersiveBg,
         contentWindowInsets = WindowInsets.safeDrawing
     ) { innerPadding ->
@@ -200,130 +188,115 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Dynamic NFC Status Notice Panel aligned to top
-            NfcStatusPanel(
-                isSupported = isNfcSupported,
-                isEnabled = isNfcEnabled,
-                onEnableClick = {
-                    try {
-                        val intent = Intent(Settings.ACTION_NFC_SETTINGS)
-                        context.startActivity(intent)
-                    } catch (e: Exception) {
+            // Dynamic NFC Status Notice Panel aligned to top only if NOT supported
+            if (!isNfcSupported) {
+                NfcStatusPanel(
+                    isSupported = false,
+                    isEnabled = isNfcEnabled,
+                    onEnableClick = {
                         try {
-                            val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS)
+                            val intent = Intent(Settings.ACTION_NFC_SETTINGS)
                             context.startActivity(intent)
-                        } catch (ex: Exception) {
-                            // Fallback
+                        } catch (e: Exception) {
+                            try {
+                                val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS)
+                                context.startActivity(intent)
+                            } catch (ex: Exception) {
+                                // Fallback
+                            }
                         }
                     }
-                }
-            )
+                )
+            }
 
             if (!showSettings) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 16.dp)
+                val activeProfile = profiles.find { it.id == activeProfileId }
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp)
                 ) {
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // 1. Active Profile Section
-                    val activeProfile = profiles.find { it.id == activeProfileId }
+                    // 1. Active Spotlight Section
                     if (activeProfile != null) {
-                        Text(
-                            text = "ACTIVE PROFILE",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = ImmersivePrimary,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.5.sp,
-                            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
-                        )
-                        ActiveSpotlightCard(
-                            profile = activeProfile,
-                            isNfcEnabled = isNfcEnabled,
-                            isEmulating = isEmulating,
-                            onEmulateToggle = { enabled ->
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.setEmulationEnabled(enabled)
-                            },
-                            onDelete = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.deleteProfile(activeProfile)
-                            }
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        NfcSignalWave(isActive = isEmulating && isNfcEnabled)
-                    } else {
-                        // Show default signal wave as fallback placeholder if no active profile selected
-                        NfcSignalWave(isActive = false)
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    // 2. Stored Profiles Section Header
-                    Text(
-                        text = "STORED PROFILES",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ImmersiveText.copy(alpha = 0.6f),
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.5.sp,
-                        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
-                    )
-
-                    // 3. Saved profiles List
-                    if (profiles.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Inbox,
-                                    contentDescription = "Empty",
-                                    tint = ImmersiveText.copy(alpha = 0.2f),
-                                    modifier = Modifier.size(64.dp)
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Column {
                                 Text(
-                                    text = "No stored profiles found",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = ImmersiveText.copy(alpha = 0.4f)
+                                    text = "ACTIVE LINK",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = ImmersivePrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.5.sp,
+                                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
                                 )
-                                Text(
-                                    text = "Tap the plus action button to add profiles.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = ImmersiveText.copy(alpha = 0.3f)
-                                )
-                            }
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(bottom = 88.dp) // Space for FAB
-                        ) {
-                            items(profiles, key = { it.id }) { profile ->
-                                val isActive = profile.id == activeProfileId
-                                ProfileCard(
-                                    profile = profile,
-                                    isActive = isActive,
-                                    onSelect = {
+                                ActiveSpotlightCard(
+                                    profile = activeProfile,
+                                    isNfcEnabled = isNfcEnabled,
+                                    isEmulating = isEmulating,
+                                    onEmulateToggle = { enabled ->
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.setActiveProfile(profile)
+                                        viewModel.setEmulationEnabled(enabled)
                                     },
                                     onDelete = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.deleteProfile(profile)
+                                        profileToDelete = activeProfile
                                     }
                                 )
+                                Spacer(modifier = Modifier.height(16.dp))
                             }
+                        }
+                    }
+
+                    // 2. Saved profiles List in two columns (No Stored Profiles text as requested)
+                    if (profiles.isEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 64.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Inbox,
+                                        contentDescription = "Empty",
+                                        tint = ImmersiveText.copy(alpha = 0.2f),
+                                        modifier = Modifier.size(64.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = "No stored profiles found",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = ImmersiveText.copy(alpha = 0.4f)
+                                    )
+                                    Text(
+                                        text = "Tap the plus action button to add profiles.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = ImmersiveText.copy(alpha = 0.3f)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        items(profiles, key = { it.id }) { profile ->
+                            val isActive = profile.id == activeProfileId
+                            ProfileGridCard(
+                                profile = profile,
+                                isActive = isActive,
+                                onSelect = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setActiveProfile(profile)
+                                },
+                                onDelete = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    profileToDelete = profile
+                                }
+                            )
                         }
                     }
                 }
@@ -349,6 +322,35 @@ fun NfcEmulatorApp(viewModel: NfcViewModel) {
                 viewModel.addProfile(title, url)
                 showAddDialog = false
             }
+        )
+    }
+
+    // Delete Confirmation Dialog
+    if (profileToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { profileToDelete = null },
+            title = { Text("Delete Link Profile", fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to delete '${profileToDelete?.title}'?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        profileToDelete?.let {
+                            viewModel.deleteProfile(it)
+                        }
+                        profileToDelete = null
+                    }
+                ) {
+                    Text("Delete", color = Color(0xFFEF4444), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { profileToDelete = null }) {
+                    Text("Cancel", color = Color.White)
+                }
+            },
+            containerColor = Color(0xFF25242A),
+            titleContentColor = Color.White,
+            textContentColor = Color.White.copy(alpha = 0.8f)
         )
     }
 }
@@ -504,9 +506,9 @@ fun ActiveSpotlightCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("active_spotlight_card"),
-        colors = CardDefaults.cardColors(containerColor = ImmersiveCardActive),
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(2.dp, ImmersivePrimary),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF25242A)),
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, ImmersiveBorder)
     ) {
         Column(
             modifier = Modifier
@@ -515,109 +517,129 @@ fun ActiveSpotlightCard(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = profile.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+                if (!profile.imageUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = profile.imageUrl,
+                        contentDescription = "Link thumbnail",
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF1E1C24)),
+                        contentScale = ContentScale.Crop
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Link,
-                            contentDescription = null,
-                            tint = ImmersivePrimary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = profile.url,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ImmersivePrimary,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                // Radio-like active badge matching HTML
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isEmulating) ImmersivePrimary else Color.Gray),
-                    contentAlignment = Alignment.Center
-                ) {
+                } else {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
-                            .clip(RoundedCornerShape(5.dp))
-                            .background(ImmersiveOnPrimary)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                // Interactive Emulation Toggle Switch Badge Row
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(30.dp))
-                        .clickable { onEmulateToggle(!isEmulating) }
-                        .background(if (isEmulating && isNfcEnabled) Color(0xFF10B981) else Color(0xFF6B7280))
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isEmulating && isNfcEnabled) Icons.Default.Sensors else Icons.Default.SensorsOff,
-                        contentDescription = if (isEmulating) "Broadcasting Active" else "Broadcasting Paused",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (!isNfcEnabled) "NFC DISABLED" else if (isEmulating) "BROADCASTING" else "PAUSED",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp
-                    )
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "AID: D276...0101",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ImmersiveText.copy(alpha = 0.7f),
-                        fontSize = 10.sp
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(
-                        onClick = onDelete,
-                        modifier = Modifier
-                            .size(36.dp)
-                            .testTag("delete_spotlight_profile")
+                            .size(56.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF1E1C24)),
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Delete profile",
-                            tint = Color(0xFFEF4444).copy(alpha = 0.8f),
-                            modifier = Modifier.size(20.dp)
+                            imageVector = Icons.Default.Link,
+                            contentDescription = "Link Icon",
+                            tint = ImmersivePrimary,
+                            modifier = Modifier.size(28.dp)
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = "ACTIVE LINK",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ImmersivePrimary,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = profile.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = profile.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ImmersiveText.copy(alpha = 0.5f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
+
+        if (!profile.description.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = profile.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = ImmersiveText.copy(alpha = 0.7f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // HCE Emulation Switch Control
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF1E1C24), shape = RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = if (isEmulating && isNfcEnabled) Icons.Default.Sensors else Icons.Default.SensorsOff,
+                    contentDescription = null,
+                    tint = if (isEmulating && isNfcEnabled) ImmersivePrimary else ImmersiveText.copy(alpha = 0.4f),
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = if (!isNfcEnabled) "NFC Is Disabled" else if (isEmulating) "HCE Broadcasting" else "Emulation Paused",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isEmulating && isNfcEnabled) Color.White else ImmersiveText.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = if (!isNfcEnabled) "Enable NFC in settings" else if (isEmulating) "Tap device to reader" else "Broadcasting is offline",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.sp,
+                        color = ImmersiveText.copy(alpha = 0.4f)
+                    )
+                }
+            }
+
+            Switch(
+                checked = isEmulating,
+                onCheckedChange = { onEmulateToggle(it) },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = ImmersiveOnPrimary,
+                    checkedTrackColor = ImmersivePrimary,
+                    uncheckedThumbColor = ImmersiveText.copy(alpha = 0.5f),
+                    uncheckedTrackColor = Color.White.copy(alpha = 0.1f)
+                ),
+                modifier = Modifier.testTag("hce_emulation_switch")
+            )
+        }
     }
+}
 }
 
 @Composable
@@ -642,6 +664,10 @@ fun NfcSignalWave(isActive: Boolean) {
         label = "alpha"
     )
 
+    // Resolve Composable theme colors outside Canvas context
+    val primaryColor = ImmersivePrimary
+    val cardActiveColor = ImmersiveCardActive
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -655,7 +681,7 @@ fun NfcSignalWave(isActive: Boolean) {
             if (isActive) {
                 // Wave 1
                 drawCircle(
-                    color = ImmersivePrimary,
+                    color = primaryColor,
                     radius = radius * scale,
                     center = center,
                     alpha = alpha,
@@ -663,7 +689,7 @@ fun NfcSignalWave(isActive: Boolean) {
                 )
                 // Wave 2 offset
                 drawCircle(
-                    color = ImmersivePrimary,
+                    color = primaryColor,
                     radius = radius * ((scale + 0.35f) % 0.9f + 0.5f),
                     center = center,
                     alpha = (alpha * 1.2f).coerceIn(0f, 1f),
@@ -673,7 +699,7 @@ fun NfcSignalWave(isActive: Boolean) {
 
             // Core emitter button
             drawCircle(
-                color = ImmersiveCardActive,
+                color = cardActiveColor,
                 radius = radius * 0.45f,
                 center = center
             )
@@ -774,88 +800,248 @@ fun NfcStatusPanel(
     }
 }
 
+fun getProfileCardColor(title: String): Color {
+    val lower = title.lowercase()
+    return when {
+        lower.contains("link") || lower.contains("tree") -> Color(0xFFD4E543) // Bright Lime Green
+        lower.contains("star") || lower.contains("coffee") || lower.contains("starbucks") -> Color(0xFF1E7154) // Teal/Green
+        lower.contains("indigo") || lower.contains("flight") -> Color(0xFFD0D7DE) // Slate Light Grey
+        else -> {
+            val hash = Math.abs(title.hashCode()) % 5
+            when (hash) {
+                0 -> Color(0xFFD4E543) // Lime Green
+                1 -> Color(0xFF1E7154) // Emerald Teal
+                2 -> Color(0xFFD0D7DE) // Slate Silver
+                3 -> Color(0xFF4285F4) // Google Blue
+                else -> Color(0xFFAB47BC) // Purple
+            }
+        }
+    }
+}
+
+fun isProfileColorLight(color: Color): Boolean {
+    return color == Color(0xFFD4E543) || color == Color(0xFFD0D7DE)
+}
+
 @Composable
-fun ProfileCard(
+fun NfcWalletLogo() {
+    val brandColor = Color(0xFF3B4CB3) // Brand royal blue logo color
+    Canvas(
+        modifier = Modifier.size(36.dp)
+    ) {
+        val scaleX = size.width / 108f
+        val scaleY = size.height / 108f
+
+        // 1. Top-Left Loop
+        val path1 = Path().apply {
+            moveTo(24f * scaleX, 32f * scaleY)
+            lineTo(52f * scaleX, 32f * scaleY)
+            cubicTo(
+                60f * scaleX, 32f * scaleY,
+                64f * scaleX, 38f * scaleY,
+                58f * scaleX, 46f * scaleY
+            )
+            lineTo(38f * scaleX, 70f * scaleY)
+            cubicTo(
+                32f * scaleX, 78f * scaleY,
+                36f * scaleX, 84f * scaleY,
+                44f * scaleX, 84f * scaleY
+            )
+            lineTo(52f * scaleX, 84f * scaleY)
+        }
+        drawPath(
+            path = path1,
+            color = brandColor,
+            style = Stroke(
+                width = 10f * scaleX,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
+
+        // 2. Bottom-Right Loop (rotated 180 deg around (54,54))
+        val path2 = Path().apply {
+            moveTo((108f - 24f) * scaleX, (108f - 32f) * scaleY)
+            lineTo((108f - 52f) * scaleX, (108f - 32f) * scaleY)
+            cubicTo(
+                (108f - 60f) * scaleX, (108f - 32f) * scaleY,
+                (108f - 64f) * scaleX, (108f - 38f) * scaleY,
+                (108f - 58f) * scaleX, (108f - 46f) * scaleY
+            )
+            lineTo((108f - 38f) * scaleX, (108f - 70f) * scaleY)
+            cubicTo(
+                (108f - 32f) * scaleX, (108f - 78f) * scaleY,
+                (108f - 36f) * scaleX, (108f - 84f) * scaleY,
+                (108f - 44f) * scaleX, (108f - 84f) * scaleY
+            )
+            lineTo((108f - 52f) * scaleX, (108f - 84f) * scaleY)
+        }
+        drawPath(
+            path = path2,
+            color = brandColor,
+            style = Stroke(
+                width = 10f * scaleX,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
+
+        // 3. Central Pill
+        drawLine(
+            color = brandColor,
+            start = androidx.compose.ui.geometry.Offset(48f * scaleX, 61.2f * scaleY),
+            end = androidx.compose.ui.geometry.Offset(60f * scaleX, 46.8f * scaleY),
+            strokeWidth = 10f * scaleX,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+fun UserAvatar(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .clickable { onClick() }
+            .background(
+                androidx.compose.ui.graphics.Brush.sweepGradient(
+                    listOf(
+                        Color(0xFFEA4335),
+                        Color(0xFFAB47BC),
+                        Color(0xFF4285F4),
+                        Color(0xFF34A853),
+                        Color(0xFFEA4335)
+                    )
+                )
+            )
+            .padding(2.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(Color(0xFF1E1C24)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Person,
+                contentDescription = "Profile",
+                tint = Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.size(24.dp)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ProfileGridCard(
     profile: NfcProfile,
     isActive: Boolean,
     onSelect: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val cardBg = if (isActive) ImmersiveCardActive else ImmersiveCardBg
-    val strokeColor = if (isActive) ImmersivePrimary else ImmersiveBorder
+    val cardColor = ImmersiveCardBg
+    val contentColor = ImmersiveText
+    val subColor = ImmersiveText.copy(alpha = 0.6f)
+    val strokeColor = if (isActive) ImmersivePrimary else ImmersiveBorder.copy(alpha = 0.3f)
+    val strokeWidth = if (isActive) 2.5.dp else 1.dp
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onSelect() }
+            .height(180.dp)
+            .combinedClickable(
+                onClick = onSelect,
+                onLongClick = onDelete
+            )
             .testTag("profile_card_${profile.id}"),
-        colors = CardDefaults.cardColors(containerColor = cardBg),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, strokeColor)
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(strokeWidth, strokeColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Column(
+            modifier = Modifier.fillMaxSize()
         ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically
+            // 1. OG Image / Banner Area (Flush to top and sides)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1.1f)
+                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    .background(Color(0xFF131216)), // Subtle ultra-dark background for image holder
+                contentAlignment = Alignment.Center
             ) {
-                // Circular Selection Indicator
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isActive) ImmersivePrimary else Color.Transparent)
-                        .border(
-                            width = 2.dp,
-                            color = if (isActive) ImmersivePrimary else ImmersiveText.copy(alpha = 0.4f),
-                            shape = RoundedCornerShape(12.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isActive) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(ImmersiveOnPrimary)
+                if (!profile.imageUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = profile.imageUrl,
+                        contentDescription = "OG Image for ${profile.title}",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    // Beautiful minimalist placeholder matching the image
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Link,
+                            contentDescription = null,
+                            tint = ImmersivePrimary.copy(alpha = 0.4f),
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Link Preview",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ImmersiveText.copy(alpha = 0.3f),
+                            fontWeight = FontWeight.Normal
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.width(16.dp))
-
-                Column {
-                    Text(
-                        text = profile.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = profile.url,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ImmersiveText.copy(alpha = 0.6f),
-                        maxLines = 1
-                    )
-                }
             }
 
-            IconButton(
-                onClick = onDelete,
+            // 2. Horizontal Divider separating top and bottom half
+            Spacer(
                 modifier = Modifier
-                    .size(48.dp)
-                    .testTag("delete_profile_${profile.id}")
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(ImmersiveBorder.copy(alpha = 0.5f))
+            )
+
+            // 3. Lower Section (URL Title and Link)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.9f)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete Profile ${profile.title}",
-                    tint = Color(0xFFEF4444).copy(alpha = 0.8f)
+                Text(
+                    text = profile.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                
+                val cleanUrl = profile.url
+                    .replace("https://", "")
+                    .replace("http://", "")
+                    .replace("www.", "")
+                
+                Text(
+                    text = cleanUrl,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = subColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -984,3 +1170,55 @@ fun AddProfileDialog(
         modifier = Modifier.testTag("add_profile_dialog")
     )
 }
+
+private val ImmersiveBg: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.background
+
+private val ImmersiveText: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.onBackground
+
+private val ImmersivePrimary: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.primary
+
+private val ImmersiveOnPrimary: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.onPrimary
+
+private val ImmersiveCardBg: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.surfaceVariant
+
+private val ImmersiveCardActive: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.secondaryContainer
+
+private val ImmersiveBorder: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.outlineVariant
+
+private val ImmersiveWarnBg: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.errorContainer
+
+private val ImmersiveWarnText: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.onErrorContainer
+
+private val ImmersiveWarnBorder: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.error
+
+private val ImmersiveSuccessBg: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.primaryContainer
+
+private val ImmersiveSuccessText: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.onPrimaryContainer
+
+private val ImmersiveSuccessBorder: Color
+    @Composable
+    get() = MaterialTheme.colorScheme.primary
