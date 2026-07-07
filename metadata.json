@@ -1,0 +1,6 @@
+{
+  "name": "TapLink",
+  "description": "NFC URL emulating app utilizing Host Card Emulation (HCE) to act as a dynamic Type 4 NFC NDEF tag.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
