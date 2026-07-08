@@ -14,11 +14,11 @@ import com.example.data.AppDatabase
 import com.example.data.NfcProfile
 import com.example.data.NfcRepository
 import com.example.NdefHostApduService
+import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +45,18 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
     private val _isEmulating = MutableStateFlow(true)
     val isEmulating: StateFlow<Boolean> = _isEmulating.asStateFlow()
 
+    private val _themeMode = MutableStateFlow(ThemeMode.AUTO)
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    private val _dynamicColor = MutableStateFlow(true)
+    val dynamicColor: StateFlow<Boolean> = _dynamicColor.asStateFlow()
+
+    private val _hapticsEnabled = MutableStateFlow(true)
+    val hapticsEnabled: StateFlow<Boolean> = _hapticsEnabled.asStateFlow()
+
+    private val _categories = MutableStateFlow<List<String>>(emptyList())
+    val categories: StateFlow<List<String>> = _categories.asStateFlow()
+
     private val nfcAdapter: NfcAdapter? = NfcAdapter.getDefaultAdapter(application)
 
     init {
@@ -59,68 +71,93 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
 
         val sharedPrefs = application.getSharedPreferences("nfc_prefs", Context.MODE_PRIVATE)
         _isEmulating.value = sharedPrefs.getBoolean("emulation_enabled", true)
+        _themeMode.value = runCatching {
+            ThemeMode.valueOf(sharedPrefs.getString("theme_mode", ThemeMode.AUTO.name) ?: ThemeMode.AUTO.name)
+        }.getOrDefault(ThemeMode.AUTO)
+        _dynamicColor.value = sharedPrefs.getBoolean("dynamic_color", true)
+        _hapticsEnabled.value = sharedPrefs.getBoolean("haptics_enabled", true)
         _activeProfileId.value = repository.getActiveProfileId()
         checkNfcStatus()
-        seedDatabaseIfEmpty()
+        loadCategories()
     }
 
-    private fun seedDatabaseIfEmpty() {
+    // ───────────── Categories (stored as an ordered list in prefs) ─────────────
+
+    private fun loadCategories() {
+        val stored = prefs().getString("categories", null)
+        _categories.value = if (stored != null) {
+            parseCategories(stored)
+        } else {
+            // Seed only "Social" on first run.
+            listOf("Social").also { persistCategories(it) }
+        }
+    }
+
+    private fun parseCategories(json: String): List<String> = try {
+        val arr = org.json.JSONArray(json)
+        (0 until arr.length()).map { arr.getString(it) }
+    } catch (e: Exception) {
+        listOf("Social")
+    }
+
+    private fun persistCategories(list: List<String>) {
+        val arr = org.json.JSONArray()
+        list.forEach { arr.put(it) }
+        prefs().edit().putString("categories", arr.toString()).apply()
+    }
+
+    fun addCategory(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        val current = _categories.value
+        if (current.any { it.equals(trimmed, ignoreCase = true) }) return
+        val updated = current + trimmed
+        _categories.value = updated
+        persistCategories(updated)
+    }
+
+    fun deleteCategory(name: String) {
+        val updated = _categories.value.filterNot { it == name }
+        _categories.value = updated
+        persistCategories(updated)
+    }
+
+    fun reorderCategories(newOrder: List<String>) {
+        _categories.value = newOrder
+        persistCategories(newOrder)
+    }
+
+    private fun prefs() =
+        getApplication<Application>().getSharedPreferences("nfc_prefs", Context.MODE_PRIVATE)
+
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+        prefs().edit().putString("theme_mode", mode.name).apply()
+    }
+
+    fun setDynamicColor(enabled: Boolean) {
+        _dynamicColor.value = enabled
+        prefs().edit().putBoolean("dynamic_color", enabled).apply()
+    }
+
+    fun setHapticsEnabled(enabled: Boolean) {
+        _hapticsEnabled.value = enabled
+        prefs().edit().putBoolean("haptics_enabled", enabled).apply()
+    }
+
+    fun clearAllTags() {
         viewModelScope.launch {
-            val currentList = repository.getAllProfiles().first()
-            if (currentList.isEmpty()) {
-                val default1 = NfcProfile(
-                    title = "Google AI Studio",
-                    url = "https://ai.studio/build",
-                    description = "Build with Gemini models in Google AI Studio, a web-based prototyping tool for developers.",
-                    imageUrl = "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?q=80&w=600&auto=format&fit=crop"
-                )
-                val default2 = NfcProfile(
-                    title = "Google Search",
-                    url = "https://google.com",
-                    description = "Search the world's information, including webpages, images, videos and more.",
-                    imageUrl = "https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=600&auto=format&fit=crop"
-                )
-                val default3 = NfcProfile(
-                    title = "Material Design 3",
-                    url = "https://m3.material.io",
-                    description = "Material 3 is the latest version of Google's open-source design system. Design and build beautiful, usable products.",
-                    imageUrl = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
-                )
-                
-                repository.insertProfile(default1)
-                repository.insertProfile(default2)
-                repository.insertProfile(default3)
-                
-                // Retrieve again to get auto-generated IDs and set the first one as active
-                val seeded = repository.getAllProfiles().first()
-                if (seeded.isNotEmpty()) {
-                    setActiveProfile(seeded[0])
-                }
-            } else {
-                // Populate imageUrl and description for existing seeded profiles if they are null
-                currentList.forEach { profile ->
-                    if (profile.imageUrl == null) {
-                        val updatedProfile = when (profile.url) {
-                            "https://ai.studio/build" -> profile.copy(
-                                description = "Build with Gemini models in Google AI Studio, a web-based prototyping tool for developers.",
-                                imageUrl = "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?q=80&w=600&auto=format&fit=crop"
-                            )
-                            "https://google.com" -> profile.copy(
-                                description = "Search the world's information, including webpages, images, videos and more.",
-                                imageUrl = "https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=600&auto=format&fit=crop"
-                            )
-                            "https://m3.material.io" -> profile.copy(
-                                description = "Material 3 is the latest version of Google's open-source design system. Design and build beautiful, usable products.",
-                                imageUrl = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop"
-                            )
-                            else -> null
-                        }
-                        if (updatedProfile != null) {
-                            repository.insertProfile(updatedProfile)
-                        }
-                    }
-                }
-            }
+            repository.clearAll()
+            _activeProfileId.value = -1
+            val context = getApplication<Application>()
+            context.getSharedPreferences("nfc_prefs", Context.MODE_PRIVATE).edit()
+                .remove("active_profile_id")
+                .remove("active_profile_url")
+                .apply()
+            context.getSharedPreferences("nfc_link_prefs", Context.MODE_PRIVATE).edit()
+                .remove("url")
+                .apply()
+            updateWidgets()
         }
     }
 
@@ -134,7 +171,7 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addProfile(title: String, url: String) {
+    fun addProfile(title: String, url: String, category: String = "Social") {
         viewModelScope.launch {
             val formattedUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) {
                 "https://$url"
@@ -167,7 +204,8 @@ class NfcViewModel(application: Application) : AndroidViewModel(application) {
                 title = finalTitle,
                 url = formattedUrl,
                 description = ogData.description,
-                imageUrl = ogData.imageUrl
+                imageUrl = ogData.imageUrl,
+                category = category
             )
             repository.insertProfile(profile)
             updateWidgets()

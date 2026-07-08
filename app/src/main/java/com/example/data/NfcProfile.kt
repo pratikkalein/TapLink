@@ -9,5 +9,6 @@ data class NfcProfile(
     val title: String,
     val url: String,
     val description: String? = null,
-    val imageUrl: String? = null
+    val imageUrl: String? = null,
+    val category: String = "Personal"
 )

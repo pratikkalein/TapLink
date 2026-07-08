@@ -22,6 +22,11 @@ class NfcRepository(
         }
     }
 
+    suspend fun clearAll() {
+        nfcProfileDao.clearAll()
+        setActiveProfileId(-1)
+    }
+
     fun getActiveProfileId(): Int {
         return sharedPrefs.getInt("active_profile_id", -1)
     }

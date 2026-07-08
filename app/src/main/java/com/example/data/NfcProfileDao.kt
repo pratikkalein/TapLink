@@ -16,4 +16,7 @@ interface NfcProfileDao {
 
     @Delete
     suspend fun deleteProfile(profile: NfcProfile)
+
+    @Query("DELETE FROM nfc_profiles")
+    suspend fun clearAll()
 }
